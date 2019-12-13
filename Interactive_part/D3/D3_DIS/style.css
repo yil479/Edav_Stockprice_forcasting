@@ -1,0 +1,90 @@
+.chart__grid {
+  stroke: #65a7e0;
+  opacity: 0.3;
+}
+svg {
+  font: 10px sans-serif;
+}
+.area {
+  fill: rgba(255,100,100,0.5);
+  clip-path: url("#clip");
+}
+.axis path,
+.axis line {
+  fill: none;
+  stroke: #1482cc;
+  shape-rendering: crispEdges;
+}
+.brush .extent {
+  stroke: rgb(92, 122, 202);
+  fill-opacity: 0.125;
+  shape-rendering: crispEdges;
+}
+/*New*/
+.chart text {
+  fill: #001;
+}
+.chart__line {
+  fill: none;
+  stroke-width: 1.2px;
+  clip-path: url("#clip");
+}
+.chart__price--focus {
+  stroke-width: 2px;
+  stroke: #1fc1c7;
+}
+.chart__average--focus {
+  stroke-width: 2px;
+  stroke: #f00;
+  opacity: 0.5;
+}
+.chart__overlay {
+  opacity: 0;
+  pointer-events: all;
+}
+.chart__tooltip--price {
+  fill: none;
+  stroke: #f00;
+}
+.chart__tooltip--average {
+  fill: none;
+  stroke: #f00;
+}
+.chart__bars {
+  fill: #a4e3f3;
+  opacity: 0.5;
+}
+.chart__range-selection text {
+  cursor: pointer;
+  text-decoration: underline;
+  fill: #f70b0b;
+}
+.chart__axis--context text {
+  fill: #7f8faf;
+}
+.chart__axis--context .tick:nth-child(odd) {
+  display: none;
+}
+.chart__axis--context path,
+.chart__axis--context line {
+  display: none;
+}
+.chart__area {
+  fill: #74ecf0;
+  stroke: #4095e6;
+}
+.extent {
+  fill: #e2f0ff;
+  fill: #5cce5c;
+  fill-opacity: 0.3;
+}
+.y.axis .tick text {
+  text-anchor: start !important;
+  fill: #001;
+}
+.y.axis .tick line {
+  display: none;
+}
+.y.axis path {
+  display: none;
+}
