@@ -494,7 +494,7 @@ ggplot(dfam_predict, aes(Date, y=price, colour=share, group=share)) +
 ```
 
 
-RACE seems to have an accelarating growth and prevents us from observing the portfolio as a whole. To see clearly what the remaining predictions are, we plot another graph without `RACE` and zoom in to observe.
+Ferrari(RACE) seems to have an accelarating growth and prevents us from observing the portfolio as a whole. We will include Ferrari in our portfolio given its stelar return. To see clearly what the remaining predictions are, we plot another graph without Ferrari and zoom in to observe.
 
 
 ```{r,fig.width=15, fig.height=10}
@@ -516,7 +516,7 @@ ggplot(dfam_scaled_predict, aes(Date, y=price, colour=share, group=share)) +
   scale_color_manual(values=palette[-18])
 ```
 The first observation is that the predicted price for LN(LINE Corporation) is zero. This might be due to the fact that the stock was not traded for a short period of time. We choose to exclude Line from our final portfolio. 
-It seems that our attempt to forecast the missing values through linear regression did not go so well since two out of the three stocks with missing values filled have abnormal behavior. We may conclude that we need a more complicated regression model to do the job or simply skip the imputation. We choose to remove these stocks from the portfolio (RACE, LN)
+It seems that our attempt to forecast the missing values through linear regression did not go so well since the missing values had an abnormal behavior. We may conclude that we need a more complicated regression model to do the job or simply skip the imputation for LN. For our purposes, we will remove the stock from the final portfolio.
 Once again, we will keep AMZN (Amazon) and Google as they have positive slopes that increase fast (In general, we would like to keep all stocks with positive slope). 
 
 ```{r,fig.width=15, fig.height=10}
@@ -712,7 +712,7 @@ In conclusion we recommend keeping the following stocks within our portfolio giv
 
 
 ```{r}
-weight3 = 0.25
+weight3 = 0.20
 weight4 = 0.1
 
 fprice <- rbind(df,Predict)
@@ -726,7 +726,7 @@ tret3 <- rowSums(freturn*weight)
 tret3 <- data.frame(tret3)
 PortfolioRet2 <- prod(tret3+1)
 
-PortfolioRet3 <- 1+(freturn$AMZN * weight3 + freturn$GOOG * weight3 +freturn$COST * weight4 +freturn$MS * weight4 +freturn$MSFT * weight4 +freturn$JNJ * weight4 +freturn$COST * weight4)
+PortfolioRet3 <- 1+(freturn$AMZN * weight3 + freturn$GOOG * weight3 +freturn$COST * weight4 +freturn$MS * weight4 +freturn$MSFT * weight4 +freturn$JNJ * weight4 +freturn$COST * weight4 + freturn$RACE * weight4 )
 
 cat("\nIf we compute the value of the Portfolio for all the stocks on their predicted price we observe the Total Portfolio Return at ",(PortfolioRet2-1)*100,"%, while if we use our selection only based on our analysis, we observe that the portfolio return increases to ",(PortfolioRet3-1)*100,"%, which represents a total increase of ",((PortfolioRet3-1)-(PortfolioRet2-1))*100 ,"%")
 
