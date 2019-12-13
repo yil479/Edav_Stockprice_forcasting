@@ -1,0 +1,701 @@
+---
+title: "Stock Analysis and Forecasting"
+author: "Tianyi Wang, Andrei Sipos, Xue Xia, Yinhe Lu"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+```
+
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(tidyquant)
+library(reshape2)
+library(GGally)
+library(robotstxt)
+library(quantmod)
+library(forecast)
+library(tseries)
+library(data.table)
+library(matrixStats)
+
+```    
+
+## Chapter I: Introduction
+
+As part of our final project, we chose to explore a portfolio of popular securities that is diversified across the different sectors of the S&P 500 and aim to achieve the following:
+
+1. Observe the distribution of our data and apply any necessary transformations in order to simplify our forecast
+2. Analyze the portfolio and understand where the most profit stems from. 
+3. Explore ways of forecasting individual stocks within the portfolio as well as the return of the entire Portfolio through different methods including factor models, Monte Carlo Simulations, R built in packages, etc
+4. Visualize and bound our forecasts within confidence intervals so that we understand what actions to take in the future in order to achieve better results
+
+## Chapter II: Data Sources
+
+Our Data is collected from 2 different sources:
+
+1. All of the models used in our project are leveraging stock price time series which is scraped from Yahoo finance. We are leveraging the tidyquant package for its versatility as we can input a tiemframe and the desired stocks and we get the price data neatly in a tibble. The 20 companies selected for our portfolio are Amazon(AMZN), Bank of America(BAC), Caterpillar Inc.(CAT), Costco(COST), Disney(DIS), Google(GOOG), Goldman Sachs(GS), IBM(IBM), Johnson&Johnson(JNJ), Merck & Co.(MRK) Morgan Stanley(MS), Microsoft(MSFT), Pfizer(PFE), Target(TGT), Walmart(WMT), ZTO Express(ZTO), LINE Corporation(LN), Spotify(SPOT), Uber(UBER), Ferrari(RACE). 
+2. For our factor models we are using data from Kenneth French's Data library (https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html), where we specifically use factor data for the Market, Size, Value and Momentum factors in order to judge returns for our portfolio of stocks.
+3. In addition to the above data, we also create our own data leveraging forecasts achieved through Monte Carlo Simulations and Linear Regressions.
+
+
+```{r}
+paths_allowed("https://finance.yahoo.com/")
+```
+
+
+```{r,fig.width=15, fig.height=10}
+
+d <- tq_get('AMZN', from = "2014-11-16", to = "2019-11-01")
+date <- d[c(1)]
+df <- data.frame(date)
+row.names(df) <- df$date
+
+company_name = c('AMZN',	'BAC',	'CAT',	'COST',	'DIS',	'GOOG',	'GS',	'IBM',	'JNJ',	'MRK',	'MS',	'MSFT',	'PFE',	'TGT',	'WMT','ZTO', 'LN', 'SPOT', 'UBER', 'RACE')
+
+for (name in company_name){
+  a <- tq_get(name, from = "2014-11-16", to = "2019-11-01")
+  adjusted <- a[c(7)]
+  colnames(adjusted) = name
+    if (nrow(adjusted) < nrow(df)){
+      missing <- nrow(df) - nrow(adjusted)
+      none <- rep(NA, missing)
+      none_df <- data.frame(none)
+      colnames(none_df) = name
+      adjusted <- rbind(none_df, adjusted)
+
+    }
+  df <- cbind(df, adjusted)
+
+}
+
+names(df)[names(df) == "date"] <- "Date"
+
+df$Date <- as.Date(df$Date, "%Y/%m/%d")
+
+dforiginal <- df
+
+```
+## Chapter III: Missing Values
+
+Whenever analyzing time series data and especially a portfolio of stock returns/ prices it is common to have entire timeframes of missing price data as some companies might not have been public at different points in time. In order to adjust for this, common practice in the finance industry is to impute/ forecast any missing values. Even though imputing is not always considered to be the best practice, it does make sense in the financial world as we can gain value from the relationship between stocks in periods when we know the full time series and use this info a linear regression where the stock with the missing data will be independent variable that we are trying to predict as a linear relationship of all the other constituenst of the portfolio. One could also apply the same approach to all the stocks within the industry or sector but such a task would be computationally much more intensive.
+
+Display NAs:
+```{r,fig.width=15, fig.height=10}
+
+tidyDF <- dforiginal[,2:21] %>%
+    rownames_to_column("id") %>%
+    gather(key, value, -id) %>%
+    mutate(missing = ifelse(is.na(value), "yes", "no"))
+
+
+ggplot(tidyDF, aes(x = key, y = fct_rev(id), fill = missing)) + geom_tile(color = "white") +
+  ggtitle("Adj. close price for stocks with NAs") +
+  ylab("Date") +
+  xlab("Stocks") +
+  scale_fill_viridis_d() + # discrete scale
+  theme_bw() +
+   theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+```
+
+Analyzing the time series for missinhg values, we observe `UBER` to be the newest stock in our sample, following by `SPOT` and `ZTO`. All of these stocks IPOed after we start gatehring data and we will need to predict the missing values for them. When looking at `LN`, LINE Corporation, we observe some annomalies: it has clustered missing values in the middle of the time series. Therefore, we will examine news articles on the stock to see what happened and try to explain this pattern.
+
+
+
+```{r,fig.width=8, fig.height=5}
+
+lineData <- df[df$Date >= "2016-6-1" & df$Date <= "2016-8-31",]
+lineData <- lineData[,c("Date", "LN")]
+
+ggplot(lineData, aes(Date, y=LN)) + 
+  geom_line(size=1) + 
+  labs(title="Closer look at missing value for LN on June 12, 2016 and June 13, 2016", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank())  
+```
+
+
+The adjusted close price was missing in mid July for LN(LINE Corporation). Its original price was very low, close to 0 and experienced a huge boost after the dates with missing values. We did some research and figured out that Line Corporation was closed shortly before its debut on the New York Stock Exchange on 14th July 2016, which explains the missing values in between. This might also explain why the price goes up significantly it was listed on the New York Stock Exchange at that point.
+
+(Source: https://www.cnbc.com/2016/07/14/japanese-messaging-app-line-opens-at-42-in-largest-tech-ipo-of-the-year.html)
+
+
+
+## Chapter IV: Data Transformation
+
+Stock Prices are notorious for not following a normal distribution. However, in order to run our analysis and ensure that our results are not biased we need to work with data that is at least fairly normal. In order to ensure this, we will be doing a couple of things:
+1. We will incease the sample size of our data as we know from the Central Limit Theorem that as we increase the size, our data will start to look approximately normal. Our focus is have sample greater than 1000 (anything above 30 should be normal).
+2. As we do know that stock price data tends to be log normally distriuted, we will be using log returns as we know that if we apply a natural logartihm on log-normal data we would be obtaining normally distributed data (All transformations are performed in R).
+3. The Factor Data has been filtered to the stipulated time frame and loaded from a CSV file. No other changes have been made to it.
+
+Also, in order to guarantee the quality of the prediction we will not impute values for `SPOT` and `UBER`, since they have very few prices and the regression might not yeald valuable results. Next, we will predict the missing values.
+
+```{r,fig.width=15, fig.height=10}
+df <- df[, !(colnames(df) %in% c("SPOT", "UBER"))]
+
+
+df2 <- df %>% filter(!is.na(LN))
+fit <- lm(LN ~ Date, data = df2)
+df3 <- df %>% 
+  mutate(pred = predict(fit, .)) %>%
+  # Replace NA with pred in var1
+  mutate(LN = ifelse(is.na(LN), pred, LN))
+df <- df3 %>% as.data.frame()
+
+
+df2 <- df %>% filter(!is.na(RACE))
+fit <- lm(RACE ~ Date, data = df2)
+df3 <- df %>% 
+  mutate(pred = predict(fit, .)) %>%
+  # Replace NA with pred in var1
+  mutate(RACE = ifelse(is.na(RACE), pred, RACE))
+df <- df3 %>% as.data.frame()
+
+
+df2 <- df %>% filter(!is.na(ZTO))
+fit <- lm(ZTO ~ Date, data = df2)
+df3 <- df %>% 
+  mutate(pred = predict(fit, .)) %>%
+  # Replace NA with pred in var1
+  mutate(ZTO = ifelse(is.na(ZTO), pred, ZTO))
+df <- df3 %>% as.data.frame()
+
+df <- df[,1:19]
+for (i in c(1,2,3,4,5)){
+  df[i,"RACE"] <-  df[6,"RACE"]
+}
+
+```
+
+Since our linear regression predicts negative values in `RACE`, which do not make sense in the real world, we reach a comprimise and just copy the closes value int the 5 missing rows.
+```{r,fig.width=15, fig.height=10}
+
+df <- df[,1:19]
+for (i in c(1,2,3,4,5)){
+  df[i,"RACE"] <-  df[6,"RACE"]
+}
+
+```
+
+
+
+
+## Chapter V: Initial Data Analysis
+
+Plot the adj. price for each stock in original scale.
+```{r,fig.width=15, fig.height=10}
+meltdf <- melt(df,id="Date")
+
+palette <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080') #18 distinct colors to represent different stocks
+
+ggplot(meltdf, aes(Date, y=value,colour=variable,group=variable)) + 
+  geom_line(size=1) + 
+  labs(title="Five years' data for stcoks", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "4 month") +
+  scale_color_manual(values=palette)
+
+```
+
+
+
+* We observe AMZN(Amazon) as the best performer among our candidates. GOOG(Google) also preforms much better than other stocks. However it is difficult ot compare with the rest given that they are not scaled.
+
+
+Plot the scaled version:
+```{r,fig.width=15, fig.height=10}
+
+dfa <- lapply(select(df, -Date), function(x) 100*x/x[1]) 
+dfa <- cbind(Date = df$Date, as.data.frame(dfa)) 
+dfam <- melt(dfa, id="Date", variable.name="share",value.name="price") 
+
+ggplot(dfam, aes(Date, y=price, colour=share, group=share)) + 
+  geom_line(size=1) + 
+  labs(title="Sclaed Five years' data", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "4 month")+
+  scale_color_manual(values=palette)
+```
+
+
+* The scaled the plot for RACE(Ferrari) seems to go crazy. Therefore, we may infer that the predicted value at the begining of time series is too small, so deviding by it makes the later value super large.
+* To exclude the affect of abnormal behavior of RACE(Ferrari) and make comparison between the rest of stocks, we plot another scaled version without it.
+
+```{r,fig.width=15, fig.height=10}
+
+dfa <- lapply(select(df, -Date), function(x) 100*x/x[1]) 
+dfa <- cbind(Date = df$Date, as.data.frame(dfa)) 
+dfam <- melt(dfa, id="Date", variable.name="share",value.name="price")
+dfam_scaled <- subset(dfam,share!="RACE")
+
+ggplot(dfam_scaled, aes(Date, y=price, colour=share, group=share)) + 
+  geom_line(size=1) + 
+  labs(title="Sclaed Five years' data, excluding RACE(Ferrari)", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "4 month")+
+  scale_color_manual(values=palette[-18])
+```
+* From the scaled graph, we can see that `AMZN` and `LN` grows high compared to its original level. The changes in scale are relatively small. 
+* Also, there are clear threshold between the predicted value of linear regression and the first available model. We may infer that linear regression might be too simple to predict the earlier data in this case, so the prediction data don't fit in the overall trend elegently. Later we will use more complicated model to predict future price and return.
+
+Examine the normality of each stock:
+```{r,fig.width=15, fig.height=15}
+
+gather(df[,2:19], condition, measurement, AMZN:WMT, factor_key = TRUE) %>%
+  ggplot(aes(sample = measurement)) +
+  facet_wrap(~ condition, scales = "free", nrow=6) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title="Normality shown in qqplot of adj. close for each stock ") 
+
+```
+
+
+* Looking at the QQ Plots for our stocks, we observe that many of our candidates do not follow a normal distribution. We will perform further investigations and apply transformations as necessary.
+
+
+Next, we will compute the return for each stock as well as well as the Portfolio return.
+
+```{r}
+#calculate weighted return
+
+return <- (df$AMZN - lag(df$AMZN, default = df$AMZN[1]))/lag(df$AMZN)
+return <- data.frame(return)
+
+
+df2 <- df[c(3:19)]
+var <- c(1:17)
+for (i in var){
+company <- df2[,i]
+return_i <- (company - lag(company, default = company[1]))/lag(company)
+#return_i <- log(company/lag(company, default = company[1]))
+
+data.frame(return_i)
+return <- cbind(return, return_i)
+}
+
+
+weight = 1/18
+tret <- rowSums(return*weight)
+tret <- data.frame(tret)
+
+
+```
+
+
+Normality of return:
+```{r,fig.width=10, fig.height=15}
+
+colnames(return) <- c('AMZN',	'BAC',	'CAT',	'COST',	'DIS',	'GOOG',	'GS',	'IBM',	'JNJ',	'MRK',	'MS',	'MSFT',	'PFE',	'TGT',	'WMT','ZTO', 'LN', 'RACE')
+
+#return <- log(return)
+
+gather(return[-1,], condition, measurement, AMZN:RACE, factor_key = TRUE) %>%
+  ggplot(aes(sample = measurement)) +
+  facet_wrap(~ condition, scales = "free", nrow=6) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title="qqplot for return of each stack") 
+
+```
+
+
+* Overall, the return for each stock seems normal in the central part, but deviate at the tails. So look together when using a test, the p-value is small and the overall return does not seem normal. This result predictable since stock returns have fat tails.
+
+* Also, we can observe that the data points gather low in the graoh for `LN`. This is because there is an outlier with extremely large value.
+
+
+## Chapter VI: Factor Models (CAPM, Fama French, Momentum)
+
+
+As part of our analysis we will compare the daily returns of our portfolio against various factors. The first factor model that we will analyse is the CAPM model. The CAPM model is very simplisting as it is a simple linear equation in which the market factor (which represents the performance of the general market) is regressed against our portfolio return. The constant of the equation will signify the value that is being added as part of our stock selection skills  and will tell us how much return is attributed to them. 
+
+
+```{r}
+
+fa <- read_csv("fama.csv")
+
+weight2 = 1/16
+tret2 <- rowSums(return[,1:16]*weight)
+tret2 <- data.frame(tret2)
+
+factormodel <- cbind(fa, tret2)
+factormodel <- factormodel[-1,]
+#factormodel <- factormodel[2:nrow(factormodel),]
+
+capm <- lm(tret2 ~ MKT, data = factormodel )
+summary(capm)
+
+PortfolioRet <- prod(tret2[-1,]+1)
+
+cat("\nPortfolio Return (CAPM) = ",capm$coefficients[1]," + ", capm$coefficients[2]," * Market Return")
+
+ggplot(factormodel, aes(tret2,MKT))+ geom_point() + labs(title = "CAPM Analysis - Daily") + labs(x="Portfolio Return", y="Market Return") + geom_smooth(method='lm', formula= y~x)
+
+
+```
+
+
+The CAPM model yields a coefficient of determination of 0.88 (As expected, the adjusted R^2 is almost identical given that this is a simple linear regression) signaling most of the data is explained by the market factor. This is expected as we have a well diversified portfolilo which means that as we keep adding more and more stocks with different return paths we will get closer and closer to the market. Looking at the intercept, we observe that 2 basis points in excess return above the market return are attributed to our stock selection capabilities on a daily basis.
+
+
+```{r}
+famafrench <- lm(tret2 ~ MKT + SMB + HML, data = factormodel )
+summary(famafrench)
+
+cat("\nPortfolio Return (Fama French) = ",famafrench$coefficients[1]," + ", famafrench$coefficients[2]," * Market Return"," + ", famafrench$coefficients[3]," * Size Return"," + ", famafrench$coefficients[4]," * Value Return")
+
+ggplot(factormodel, aes(tret2,SMB))+ geom_point() + labs(title = "Fama French Analysis - Daily") + labs(x="Portfolio Return", y="Size Factor Return") + geom_smooth(method='lm', formula= y~x)
+
+ggplot(factormodel, aes(tret2,HML))+ geom_point() + labs(title = "Fama French Analysis - Daily") + labs(x="Portfolio Return", y="Value Factor Return") + geom_smooth(method='lm', formula= y~x)
+
+
+```
+
+
+In order to build the Fama French model, we are adding the size and value factors to our simple linear regression. Size represents the value add (increase in return) that is observed in smaller companies comapared to larger companies, while value represents stocks that are inexpensive compared to their fundamentals (Ex: PE ratio). Looking at our multi linear regression, we observe an increase in both the coefficienct of determination: 0.8959 and adjusted R^2: 0.8956 (On a side note, the adjusted R^2 takes into account the number of variables in the model when performing the regression). As such we can conclude that the Fama French Model is marginally better compared to the CAPM model.  
+
+
+
+```{r}
+momentum <- lm(tret2 ~ MKT + SMB + HML + MOM, data = factormodel )
+summary(momentum)
+
+cat("\nPortfolio Return (Momentum) = ",momentum$coefficients[1]," + ", momentum$coefficients[2]," * Market Return"," + ", momentum$coefficients[3]," * Size Return"," + ", momentum$coefficients[4]," * Value Return"," + ", momentum$coefficients[5]," * Momentum Return")
+
+ggplot(factormodel, aes(tret2,MOM))+ geom_point() + labs(title = "Momentum Model Analysis - Daily") + labs(x="Portfolio Return", y="Momentum Factor Return") + geom_smooth(method='lm', formula= y~x)
+
+```
+
+Adding the Momentum Factor to the Fama French model, we obtain the Momentum 4 factor model. Momentum is the return obtained by investing in stocks that perform well as part of momentum trading (Once a stock goes up, it will keep going up for next cluster of trading sesssion while similarly once it starts going down it will keep going down). We once again observe a marginal increase in both R^2: 0.8965 and adjusted R^2: 0.8961 suggesting that the Momentum Model is the best way so far to forecast the return of our portfolio. Looking at all the coefficients, we observe once again that the MArket coefficient contributes the most to the return of our portfolio, followed by Value and Momentum. We also notice that Size on average detracts from the total return of our portfolio; thus we conclude that we should invest too heavily into smaller companies.
+
+
+
+## Chapter VII: Monte Carlo Simulations & Forecasting
+
+As part of the monte Carlo Forecasting, we aim to predict & visualize the value of individual stocks as well as the overall portfolio. 
+
+The maths behind the simulation are fairly interesting and involver several parts.
+1. We will use the exting return data to observe the annualized average return, and annualized standard deviation for each stock while also computing the correlation matrix for our individual returns.
+2. The correlation matrix will be decomposed using the Cholesky Decomposition into the Lower and Upper Matrices. At the same time, we will generate 10000 standard normal random variables which we incorporate into the Lower Matrix in order top impose the same historical correlation into our forecast.
+3. Next we will compute 10000 prices for each stock in the portfolio using the geometric Brownian Motion formula for stock prices which incorporates the abverage returns, volatilities and correlation for our portfolio of stocks.
+4. In order to finally obtain our monte carlo forecast, we take the average of our forecasted price per stock and add 90 percent confidence intervals
+5. Last, we will visualize our results and draw conclusions for our portfolio.
+
+
+
+
+```{r}
+#monte carlo
+return <- return[-(1:2),]
+n = 1000
+k <- c(1:(ncol(df)-1))
+col <- c(1:n)
+lower <- t(chol(cor(df[,2:19])))
+rand_mat <- matrix(rnorm((ncol(df)-1)*n, mean = 0, sd = 1),nrow = ncol(df)-1,ncol = n)
+rand <- data.frame(rand_mat)
+NewCorr_mat <- matrix(0, nrow = ncol(df)-1, ncol = n)
+NewCorr <- data.frame(NewCorr_mat)
+ST_mat <- matrix(0, nrow = ncol(df)-1, ncol = n)
+ST <- data.frame(ST_mat)
+S0 <- df[1248, 2:19]
+S0 <- t(S0)
+Miu_mat <- colMeans(return)*253
+Miu <- data.frame(Miu_mat)
+Sigma_mat <- colSds(as.matrix(return, na.rm=TRUE))*sqrt(253)
+Sigma <- data.frame(Sigma_mat)
+Time = 5
+for (i in k){
+  for (j in col){
+    sum = 0
+    for (I in k){
+      sum = sum + lower[i,I] * rand[I,j]
+      NewCorr[i,j] = sum
+    }
+    ST[i,j] = S0[i,1]*exp(Miu[i,1] - (Sigma[i,1]^2)/2*Time + Sigma[i,1]*sqrt(Time)*NewCorr[i,j])
+      
+    }
+  }
+```
+
+
+```{r}
+Predict <- rowMeans(ST)
+Predict <- data.frame(Predict)
+Predict <- t(Predict)
+predict_date <- as.Date("2024/11/01", "%Y/%m/%d")
+predict_date <- data.frame(predict_date)
+Predict <- cbind(predict_date, Predict)
+colnames(Predict) <- c('Date','AMZN',	'BAC',	'CAT',	'COST',	'DIS',	'GOOG',	'GS',	'IBM',	'JNJ',	'MRK',	'MS',	'MSFT',	'PFE',	'TGT',	'WMT','ZTO', 'LN', 'RACE')
+
+```
+```{r,fig.width=15, fig.height=10}
+df_predict <- rbind(df,Predict)
+
+meltdf <- melt(df_predict,id="Date")
+
+ggplot(meltdf, aes(Date, y=value,colour=variable,group=variable)) + 
+  geom_line(size=1) + 
+  labs(title="Five years' data for stocks + predicted stock price in five years", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "1 year") +
+  scale_color_manual(values=palette)
+  
+```
+Plotting the predicted values for all of our stocks in addition to their existing time series we once again observe Amazon and Google as our top performes and we predict they will continue to do so assuming past correlations and volatilities. We recommend to keep both stocks in our portfolio going forward and increase their wights for more exosure.
+
+In order to diversify our portfolio, we need to add/ keep other stocks as well in order to hedge against downside risk. Let's have a look at our forecasts after we scaled based on initial value to make comparison between all stocks: 
+
+```{r,fig.width=15, fig.height=10}
+df_predict <- rbind(df,Predict)
+
+
+dfa_predict <- lapply(select(df_predict, -Date), function(x) 100*x/x[1]) 
+dfa_predict <- cbind(Date = df_predict$Date, as.data.frame(dfa_predict)) 
+dfam_predict <- melt(dfa_predict, id="Date", variable.name="share",value.name="price")
+
+
+ggplot(dfam_predict, aes(Date, y=price, colour=share, group=share)) + 
+  geom_line(size=1) + 
+  labs(title="Adjusted five years' data for stcoks + predicted stock price in five years (scaled)", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "1 year")+
+  scale_color_manual(values=palette)
+```
+
+* RACE seems to have an accelarating growth and we definitely recommend keeping it. 
+* To see clearly what the remaining predictions are, we plot another graph without `RACE` and zoom in to observe.
+
+
+```{r,fig.width=15, fig.height=10}
+df_predict <- rbind(df,Predict)
+
+
+dfa_predict <- lapply(select(df_predict, -Date), function(x) 100*x/x[1]) 
+dfa_predict <- cbind(Date = df_predict$Date, as.data.frame(dfa_predict)) 
+dfam_predict <- melt(dfa_predict, id="Date", variable.name="share",value.name="price")
+dfam_scaled_predict <- subset(dfam_predict,share!="RACE")
+
+
+ggplot(dfam_scaled_predict, aes(Date, y=price, colour=share, group=share)) + 
+  geom_line(size=1) + 
+  labs(title="Adjusted five years' data for stcoks + predicted stock price in five years (Scaled, excluded Ferrari)", x="Date", y="Adj. Close") +
+  theme(legend.position="bottom") + 
+  theme(legend.title=element_blank()) + 
+  scale_x_date(breaks = "1 year")+
+  scale_color_manual(values=palette[-18])
+```
+* Similarly we would like to keep AMZN (Amazon). In general we would like to keep all stocks with positive slope.
+* Another interesting observation is that the predicted price for LN(LINE Corporation) is zero. ...
+
+```{r}
+start_date <- as.Date("2019/11/15", "%Y/%m/%d")
+predict_date <- as.Date("2024/11/01", "%Y/%m/%d")
+
+
+AMZN <- t(ST[1,])
+AMZN <- sort(AMZN)
+AMZN <- data.frame(AMZN)
+colnames(AMZN) = 'AMZN'
+CI_lower <- AMZN[50,1]
+CI_upper <- AMZN[950,1]
+
+date <-c(start_date, predict_date)
+date <- data.frame(date)
+company <- c('AMZN', 'AMZN')
+company <- data.frame(company)
+price <- c(df[1248, 2], Predict[1,2])
+price <- data.frame(price)
+lower <- c(df[1248, 2], CI_lower)
+lower <- data.frame(lower)
+upper <- c(df[1248,2], CI_upper)
+upper <- data.frame(upper)
+data <- cbind(date, company, price, lower, upper)
+
+p<-ggplot(data, aes(x=date, y=price, fill='Confidence Interval')) + 
+  geom_point() + 
+  geom_line() +
+  geom_ribbon(aes(ymin=data$lower, ymax=data$upper), linetype=2, alpha=0.1) +
+  ggtitle('Predicted stock price for Amazon with 90% CI')
+
+p
+```
+
+We also want to be mindful of the confidence intervals for our predictions as worse outcomes may occur given a bear market (our analysis was conducted during a bull market hence the inflated returns. Looking at the 90% confidence interval for Amazon we observe quite a bit of upside potential (AMZN may go up to $6000 assuming above average growth) while the worst possible scenarios would see the stock go down below $1000.
+
+```{r}
+DIS <- t(ST[5,])
+DIS <- sort(DIS)
+DIS <- data.frame(DIS)
+colnames(DIS) = 'DIS'
+CI_lower <- DIS[50,1]
+CI_upper <- DIS[950,1]
+
+
+company <- c('DIS', 'DIS')
+price <- c(df[1248, 6], Predict[1,6])
+lower <- c(df[1248, 6], CI_lower)
+upper <- c(df[1248,6], CI_upper)
+data <- cbind(date, company, price, lower, upper)
+
+p<-ggplot(data, aes(x=date, y=price, fill='Confidence Interval')) + 
+  geom_point() + 
+  geom_line() +
+  geom_ribbon(aes(ymin=data$lower, ymax=data$upper), linetype=2, alpha=0.1) +
+  ggtitle('Predicted stock price for Disney with 90% CI')
+
+p
+```
+ 
+Looking at Disney which is a fully matured stock, the average return seems to be slightly increasing over the next 5 years. Best case scenarios would see the stock go up to $300, while worst case scenarios would see the stock go down to $75. WE recommend keeping DIS as its return stream is stable and pays constant dividends.
+
+
+```{r}
+JNJ <- t(ST[9,])
+JNJ <- sort(JNJ)
+JNJ <- data.frame(JNJ)
+colnames(JNJ) = 'JNJ'
+CI_lower <- JNJ[50,1]
+CI_upper <- JNJ[950,1]
+
+
+company <- c('JNJ', 'JNJ')
+price <- c(df[1248, 10], Predict[1,10])
+lower <- c(df[1248, 10], CI_lower)
+upper <- c(df[1248,10], CI_upper)
+data <- cbind(date, company, price, lower, upper)
+
+p<-ggplot(data, aes(x=date, y=price, fill='Confidence Interval')) + 
+  geom_point() + 
+  geom_line() +
+  geom_ribbon(aes(ymin=data$lower, ymax=data$upper), linetype=2, alpha=0.1) +
+  ggtitle('Predicted stock price for Johnson & Johnson with 90% CI')
+
+p
+```
+
+Looking at Johnson & Johnson, we observe slightly more upside potential with an average predicted price of $150, while max price would be $250 and a worst case scenario of $75.
+
+
+```{r}
+MS <- t(ST[11,])
+MS <- sort(MS)
+MS <- data.frame(MS)
+colnames(MS) = 'MS'
+CI_lower <- MS[50,1]
+CI_upper <- MS[950,1]
+
+
+company <- c('MS', 'MS')
+price <- c(df[1248, 12], Predict[1,12])
+lower <- c(df[1248, 12], CI_lower)
+upper <- c(df[1248, 12], CI_upper)
+data <- cbind(date, company, price, lower, upper)
+
+p<-ggplot(data, aes(x=date, y=price, fill='Confidence Interval')) + 
+  geom_point() + 
+  geom_line() +
+  geom_ribbon(aes(ymin=data$lower, ymax=data$upper), linetype=2, alpha=0.1) +
+  ggtitle('Predicted stock price for Morgan Stanley with 90% CI')
+
+p
+```
+
+Morgan Stanley is projected to have steady growth with an average predicted 5 year price of $50. Best case scenarios would see the stock fly up to $120 while worst case scenarios would see the stock go down to around $20
+
+
+## Chapter VIII: Interactive Graphs
+
+### Part 1: D3- Stock price analysis 
+
+**Johnson&Johnson(2014-2019)**
+
+http://bl.ocks.org/yil479/a962d9785e42ea54aa2edf6a4dbf0ddf/28a78c1124bddec879b07195a0969bbbc13fcbd6    
+
+**Disney(2014-2019)**
+
+http://bl.ocks.org/yil479/1ba241943d1fe1db71921adea7ff9d2e/cca58453ee6044a3a76d138585fb4c3e28525a36    
+
+**Morgan Stanley(2014-2019)**
+
+http://bl.ocks.org/yil479/9014305de696c2392ddd4e78488fdc38/947770a2019c5628d208a670281d1b30bab55b6e 
+
+**Amazon(2014-2019)**
+
+http://bl.ocks.org/yil479/9053e30eb305017afbbd0cde19a547c4/802157dc4471151c6156391b124ba0f5400e798d     
+
+
+We visualized four stock prices(Morgan Stanley, Amazon, JNJ, Disney) based on data from Yahoo Finance. 
+
+1. When clicking on the line, the data on that date will be highlighted in points: blue line(amazon), green line(JNJ and Morgan Stanley), light blue line(Disney) are  indicating stock price; red line in all four graphs are indicating the averaged price; the histogram on the bottom are indicating trading volume. 
+2. The date and numerical description of the data will be displayed on the top-left corner of the plot.  Users can select zoom-in range of data based on different time period by clicking the buttons: one week(1w), one month(1m), three months(3m), six months(6m), one year(1y), five years(5y).
+3. The box below can be moved along the total time line to switch the zoom-in region, so that different periods of data can be selected.
+
+
+### Part 2: Shiny app -- stock return portofolio
+https://yil479.shinyapps.io/123123/
+
+This is a shiny app tool for analyzing the Yahoo finance stock market.  The main goal of this application is to build a U.S. stock market portfolio for investment decision making. We used a classical model, CAPM to help us generate the expected return given the input risk rate. 
+We chose 15 stocks from four fields(technology, finance, entertainment, medical) as our target stocks to predict their returns 
+
+1. Users can change the parameters based on their preference such as investment period(by clicking on 1m, 6m, 1y button or input date manually).
+2. Users can also change their risk free rate to get different alpha results.
+3. The graph will show the security market line to indict overvalued stocks(below SML) and undervalued stocks(above SML).
+4. The stock table will also indicate overvalued stocks(red) and undervalued stocks(green).
+
+Analyzed stock table will show
+
+1. ticker name
+2. beta( the expected return of an asset), 
+3. expected return and true return, 
+4. alpha(a measurement used to determine how well an asset or portfolio performed relative to its expected return on investment with a given amount of risk.
+5. r2(a measure of the percentage of an asset or fund's performance as a result of a benchmark) 6.sortino( the risk-adjusted return of an asset by calculating the average return earned in excess of the risk-free rate per unit of volatility.)
+Once parameters are changed the app will automatically reload the real time stock data and newest analysis.
+
+Reference: https://github.com/lamres/capm_shiny
+
+## Chapter IX: Conclusion
+
+In conclusion we recommend keeping the following stocks within our portfolio given their predicted values and taking into account their diversification potential: AMZN, GOOG, DIS, MS, MSFT, JNJ, COST. As both AMZN and GOOG are top performers, we recommend investing 25% of our portfolio in each while also investing 10% into the remaimnder.
+
+
+```{r}
+weight3 = 0.1
+weight4 = 0.25
+
+fprice <- rbind(df,Predict)
+fprice <- fprice[-1:(-1247),1:ncol(fprice)]
+
+freturn<- (fprice[2,]-fprice[1,])/fprice[1,]
+freturn<-freturn[,-1]
+#freturn <- data.frame(freturn)
+
+tret3 <- rowSums(freturn*weight)
+tret3 <- data.frame(tret3)
+PortfolioRet2 <- prod(tret3+1)
+
+PortfolioRet3 <- 1+(freturn$AMZN * weight3 + freturn$GOOG * weight3 +freturn$DIS * weight4 +freturn$MS * weight4 +freturn$MSFT * weight4 +freturn$JNJ * weight4 +freturn$COST * weight4)
+
+cat("\nIf we compute the value of the Portfolio for all the stocks on their predicted price we observe the Total Portfolio Return at ",(PortfolioRet2-1)*100,"%, while if we use our selection only based on our analysis, we observe that the portfolio return increases to ",(PortfolioRet3-1)*100,"%, which represents a total increase of ",((PortfolioRet3-1)-(PortfolioRet2-1))*100 ,"%")
+
+```
+
+Please do note that our forecasts are based on historical data which was applied on normal random variables in order to compute our portfolio returns. In a scenario in which correlations between our stocks are significantly different (such a stock market crash when correlation invert and stick to each other) the predicted returns might be very different.
+
+
+
+
