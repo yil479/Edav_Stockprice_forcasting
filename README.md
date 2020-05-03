@@ -19,8 +19,8 @@ we chose to explore a portfolio of popular securities that is diversified across
 
 
 ## Author
-
+* Yinhe Lu
 * Tianyi Wang
 * Andrei Sipos
 * Xue Xia
-* Yinhe Lu
+
